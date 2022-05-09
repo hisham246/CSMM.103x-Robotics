@@ -45,10 +45,105 @@ def cartesian_control(joint_transforms, b_T_ee_current, b_T_ee_desired,
     dq = numpy.zeros(num_joints)
     #-------------------- Fill in your code here ---------------------------
     
-    
-    
-    
-    
+    # Compute the desired change in end-effector pose from b_T_ee_current to b_T_ee_desired (Delta_X)
+    ee_cur_T_b = tf.transformations.inverse_matrix(b_T_ee_current)
+    ee_cur_T_ee_des = numpy.dot(ee_cur_T_b, b_T_ee_desired)
+
+    # Get the translation part (Delta_X)
+    ee_cur_t_ee_des = tf.transformations.translation_from_matrix(ee_cur_T_ee_des)
+
+    # Get the rotation part (Delta_X)
+    ee_cur_R_ee_des = ee_cur_T_ee_des[:3,:3]
+    # Obtain the necessary angles aroud different axis for the motion required
+    angle, axis = rotation_from_matrix(ee_cur_T_ee_des)
+    ROT = numpy.dot(angle,axis)
+
+    # convert the desired change into a desired end-effector velocity
+    # (the simplest form is to use a PROPORTIONAL CONTROLLER)
+    # Change of the end-effector in the base coordinate frame
+    lin_gain = 1.5
+    rot_gain = 1.5
+    delta_X = numpy.append(ee_cur_t_ee_des * lin_gain, ROT * rot_gain)
+
+    # velocity controller in end-effector space
+    x_dot = delta_X
+
+    # normalize the desired change
+    '''
+    if numpy.linalg.norm(x_dot) > 1.0:
+        x_dot /= max(x_dot)
+    '''
+
+    # NUMERICALLY compute the robot Jacobian. For each joint compute the matrix
+    # that relates the velocity of that joint to the velocity of the end-effector
+    # in its own coordinate frame. Assemble the last column of all these matrices
+    # to construct the Jacobian.
+
+    # This tells you what a specific joint is going to do to the end effector,
+    # in the reference frame of the joint
+
+    # The Jacobian is a matrix that relates the velocity of that joint to the
+    # velocity of the end-effector in its own coordinate frame
+    J = numpy.empty((6, 0))
+    # Vj = numpy.zeros((6,6))
+    for j in range(num_joints):
+        # b_T_j (from base to joint j)
+        b_T_j = joint_transforms[j]
+        #rospy.logdebug('\n\n[b_T_j]\n\n%s\n\n', b_T_j)
+
+        # Transformation to obtain the velocity in its own coordinate frame
+        j_T_b = tf.transformations.inverse_matrix(b_T_j)
+        j_T_ee_cur = numpy.dot(j_T_b, b_T_ee_current)
+
+        # invert the previous homogeneous matrix
+        ee_cur_T_j = tf.transformations.inverse_matrix(j_T_ee_cur)
+
+        ee_cur_R_j = ee_cur_T_j[:3,:3]
+
+        j_t_ee_cur = tf.transformations.translation_from_matrix(j_T_ee_cur)
+        S_j_ee = S_matrix(j_t_ee_cur)
+
+        # This matrix is only applicable for revolute joints
+        Vj = numpy.append(
+            numpy.append(
+                ee_cur_R_j,
+                numpy.dot(-ee_cur_R_j, S_j_ee),
+                axis=1),
+            numpy.append(
+                numpy.zeros([3,3]),
+                ee_cur_R_j,
+                axis=1),
+            axis=0)
+        #rospy.logdebug('\n\n[Vj]\n\n%s\n\n', Vj)
+
+        # Assuming that all the joints are revolute, we only use the z component
+        J = numpy.column_stack((J, Vj[:,5]))
+
+    # Compute the pseudo-inverse of the Jacobian to avoid numerical
+    # issues that can arise from small singular values
+    # Use the pseudo-inverse of the Jacobian to map from end-effector velocity to
+    # joint velocities.
+    J_pinv = numpy.linalg.pinv(J, rcond=1e-2)
+
+    # map from end-effector velocity to joint velocities (angular in the z axis for all joints)
+    dq = numpy.dot(J_pinv, x_dot)
+
+    if red_control == True:
+        # implements the null-space control on the first joint
+        # This can be implemented in any moment because the robot
+        # has more joints than DOF
+
+        # find a joint velocity that brings the joint closer to the secondary objective.
+        # use the Jacobian and its pseudo-inverse to project this velocity into the
+        # Jacobian nullspace. It must be used the 'exact' version of the Jacobian
+        # pseudo-inverse, not its 'safe' version.
+        # J_pinv = numpy.linalg.pinv(J, rcond=0)
+        dq_n = numpy.dot(
+            numpy.identity(num_joints) - numpy.dot(J_pinv, J),
+            numpy.array([q0_desired - q_current[0],0,0,0,0,0,0]))
+        #Then add the result to the joint velocities obtained for the primary objective
+        dq = numpy.dot(J_pinv, x_dot) + dq_n
+   
     #----------------------------------------------------------------------
     return dq
     
