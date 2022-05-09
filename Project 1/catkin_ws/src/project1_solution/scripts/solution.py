@@ -5,7 +5,10 @@ from std_msgs.msg import Int16
 from project1_solution.msg import TwoInts
 
 def callback(data):
-    ### YOUR CODE HERE ###
+    msg = Int16(data.a + data.b)
+	rospy.loginfo(str(data.a) + " + " + str(data.b) + " = " + str(msg))
+	pub.publish(msg)
+
     
 def listener():
     rospy.init_node('solution')
